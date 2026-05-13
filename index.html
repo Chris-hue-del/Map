@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>旅跡 · Wanderlog</title>
+
+  <!-- Mapbox CSS (no token needed here) -->
+
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" />
+
+  <!-- Tailwind CDN -->
+
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Fonts -->
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            serif: ['Cormorant Garamond', 'serif'],
+            sans: ['DM Sans', 'sans-serif'],
+          },
+          colors: {
+            sand: { 50:'#faf8f5', 100:'#f3ede3', 200:'#e8dccb', 300:'#d9c9ae', 400:'#c4a87e', 500:'#b08d60', 600:'#9a7448', 700:'#7d5c36' },
+            slate2: { 50:'#f8f9fb', 100:'#eef0f5', 200:'#dde1ea', 300:'#c2c9d8', 400:'#9aa4b8', 500:'#6b7a94', 600:'#4e5d77', 700:'#3a4560' },
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body { font-family: 'DM Sans', sans-serif; background: #faf8f5; color: #2d2d2d; overflow-x: hidden; }
+
+    /* ── Startup Loading Screen ── */
+    #startup-screen {
+      position: fixed; inset: 0; z-index: 999;
+      background: #faf8f5;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+      transition: opacity .5s;
+    }
+    #startup-screen.hidden { opacity: 0; pointer-events: none; }
+
+    /* ── Map ── */
+    #map { width: 100%; height: 100vh; }
+    .mapboxgl-ctrl-logo, .mapboxgl-ctrl-attrib { opacity: 0.4; }
+
+    /* ── Pulse markers ── */
+    .pulse-marker {
+      width: 14px; height: 14px;
+      background: #b08d60; border-radius: 50%;
+      border: 2.5px solid #fff;
+      box-shadow: 0 0 0 0 rgba(176,141,96,.6);
+      animation: pulse 2.2s infinite; cursor: pointer; position: relative;
+    }
+    .pulse-marker::after {
+      content: ''; position: absolute; inset: -6px; border-radius: 50%;
+      background: rgba(176,141,96,.18); animation: pulse-ring 2.2s infinite;
+    }
+    @keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(176,141,96,.5)} 70%{box-shadow:0 0 0 10px rgba(176,141,96,0)} }
+    @keyframes pulse-ring { 0%,100%{transform:scale(1);opacity:.6} 70%{transform:scale(1.8);opacity:0} }
+
+    /* ── Glass ── */
+    .glass {
+      background: rgba(255,255,255,.82); backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,.6);
+    }
+
+    /* ── Timeline ── */
+    .timeline-line { position:absolute; left:7px; top:0; bottom:0; width:1.5px; background:linear-gradient(to bottom,#e8dccb,#b08d60,#e8dccb); }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #d9c9ae; border-radius: 2px; }
+
+    /* ── Photo ── */
+    .photo-thumb { transition: transform .25s, box-shadow .25s; }
+    .photo-thumb:hover { transform: scale(1.04); box-shadow: 0 8px 32px rgba(0,0,0,.12); }
+
+    /* ── Drag drop ── */
+    #drop-zone.drag-over, #detail-drop-zone.drag-over { border-color: #b08d60; background: rgba(176,141,96,.06); }
+
+    /* ── Nav ── */
+    #top-nav { transition: background .4s, box-shadow .4s; }
+
+    /* ── Spinner ── */
+    .spin { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Mapbox popup ── */
+    .mapboxgl-popup-content {
+      background: rgba(255,255,255,.92); backdrop-filter: blur(12px);
+      border-radius: 10px; padding: 10px 14px;
+      box-shadow: 0 4px 20px rgba(0,0,0,.1);
+      font-family: 'DM Sans', sans-serif; font-size: 13px; color: #3a4560;
+      border: 1px solid rgba(255,255,255,.7);
+    }
+    .mapboxgl-popup-tip { border-top-color: rgba(255,255,255,.92) !important; }
+
+    /* ── Error banner ── */
+    #error-banner { display: none; }
+  </style>
+
+</head>
+<body>
+
+<!-- ══ STARTUP LOADING SCREEN ══ -->
+
+<div id="startup-screen">
+  <p class="font-serif text-3xl text-slate2-600 tracking-widest">旅跡</p>
+  <div class="flex items-center gap-2 text-sm text-slate2-400">
+    <svg class="w-4 h-4 spin" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path d="M4 4v5h5M20 20v-5h-5M4 9a9 9 0 0115.4-4.4M20 15a9 9 0 01-15.4 4.4"/>
+    </svg>
+    正在載入地圖…
+  </div>
+</div>
+
+<!-- ══ ERROR BANNER (shown if /api/config fails) ══ -->
+
+<div id="error-banner" class="fixed inset-0 z-[999] flex items-center justify-center bg-sand-50 p-6">
+  <div class="max-w-md bg-white rounded-3xl p-8 shadow-lg text-center space-y-4">
+    <div class="text-4xl">⚠️</div>
+    <h2 class="font-serif text-2xl text-slate2-700">設定尚未完成</h2>
+    <p id="error-msg" class="text-sm text-slate2-500 leading-relaxed"></p>
+    <p class="text-xs text-sand-500 bg-sand-50 rounded-xl p-3">
+      請前往 <strong>Vercel 後台 → Settings → Environment Variables</strong><br/>
+      設定 MAPBOX_TOKEN、SUPABASE_URL、SUPABASE_ANON_KEY
+    </p>
+  </div>
+</div>
+
+<!-- ══════════════════════════ NAV ══════════════════════════ -->
+
+<nav id="top-nav" class="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-5 py-4 sm:px-10">
+  <div class="flex items-center gap-3">
+    <span class="text-2xl font-serif font-light tracking-widest text-slate2-700">旅跡</span>
+    <span class="hidden sm:block text-xs tracking-[.2em] text-sand-500 uppercase mt-1">Wanderlog</span>
+  </div>
+  <div class="flex items-center gap-3">
+    <div class="glass rounded-full px-4 py-1.5 flex items-center gap-2 text-xs text-slate2-600">
+      <svg class="w-3.5 h-3.5 text-sand-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M3 12h18M3 6l9-3 9 3M3 18l9 3 9-3"/>
+      </svg>
+      <span>總里程</span>
+      <span id="km-counter" class="font-medium text-slate2-700 tabular-nums">— km</span>
+    </div>
+    <button id="btn-add-trip" class="glass rounded-full px-5 py-2 text-sm font-medium text-slate2-700 hover:bg-white/90 active:scale-95 transition-all flex items-center gap-2 shadow-sm">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14"/>
+      </svg>
+      新增旅程
+    </button>
+  </div>
+</nav>
+
+<!-- ══════════════════════════ HERO MAP ══════════════════════════ -->
+
+<section id="section-map" class="relative w-full" style="height:100vh">
+  <div id="map"></div>
+  <div class="absolute bottom-10 left-5 sm:left-10 max-w-xs glass rounded-2xl p-5 shadow-lg pointer-events-none">
+    <p class="font-serif text-2xl text-slate2-700 leading-snug">每一個點，<br/><em>都是一段故事。</em></p>
+    <p class="text-xs text-slate2-500 mt-2">點擊地圖上的光點，探索旅程</p>
+  </div>
+  <div class="absolute bottom-10 right-5 sm:right-10 flex flex-col items-center gap-2 opacity-60">
+    <span class="text-xs tracking-widest text-slate2-500 uppercase" style="writing-mode:vertical-rl">Scroll</span>
+    <div class="w-px h-10 bg-gradient-to-b from-sand-400 to-transparent"></div>
+  </div>
+</section>
+
+<!-- ══════════════════════════ TIMELINE ══════════════════════════ -->
+
+<section id="section-timeline" class="max-w-3xl mx-auto px-5 py-20 sm:py-28">
+  <div class="mb-12 text-center">
+    <p class="text-xs tracking-[.3em] text-sand-500 uppercase mb-2">Travel Log</p>
+    <h2 class="font-serif text-4xl sm:text-5xl text-slate2-700 font-light">旅程時間軸</h2>
+  </div>
+  <div id="timeline-list" class="relative pl-6">
+    <div class="timeline-line"></div>
+    <div id="timeline-empty" class="text-center text-slate2-400 py-16 text-sm">
+      還沒有旅程紀錄，點擊右上角新增第一筆吧 ✈️
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════ ADD TRIP MODAL ══════════════════════════ -->
+
+<div id="modal-overlay" class="fixed inset-0 z-[100] bg-black/30 items-center justify-center p-4" style="display:none;opacity:0">
+  <div id="modal-box" class="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden" style="max-height:92vh;overflow-y:auto">
+    <div class="flex items-center justify-between px-7 pt-7 pb-4 border-b border-sand-100">
+      <h3 class="font-serif text-2xl text-slate2-700">新增旅程</h3>
+      <button id="btn-close-modal" class="w-8 h-8 rounded-full bg-sand-100 hover:bg-sand-200 flex items-center justify-center text-slate2-500 transition-colors">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="px-7 py-6 space-y-5">
+      <div>
+        <label class="block text-xs tracking-widest text-slate2-500 uppercase mb-2">城市 / 地點 *</label>
+        <input id="input-city" type="text" placeholder="例：Tokyo, Japan" class="w-full border border-sand-200 rounded-xl px-4 py-3 text-sm text-slate2-700 focus:outline-none focus:border-sand-400 bg-sand-50 transition-colors" />
+      </div>
+      <div>
+        <label class="block text-xs tracking-widest text-slate2-500 uppercase mb-2">國家</label>
+        <input id="input-country" type="text" placeholder="例：Japan" class="w-full border border-sand-200 rounded-xl px-4 py-3 text-sm text-slate2-700 focus:outline-none focus:border-sand-400 bg-sand-50 transition-colors" />
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs tracking-widest text-slate2-500 uppercase mb-2">開始日期 *</label>
+          <input id="input-date-start" type="date" class="w-full border border-sand-200 rounded-xl px-4 py-3 text-sm text-slate2-700 focus:outline-none focus:border-sand-400 bg-sand-50 transition-colors" />
+        </div>
+        <div>
+          <label class="block text-xs tracking-widest text-slate2-500 uppercase mb-2">結束日期</label>
+          <input id="input-date-end" type="date" class="w-full border border-sand-200 rounded-xl px-4 py-3 text-sm text-slate2-700 focus:outline-none focus:border-sand-400 bg-sand-50 transition-colors" />
+        </div>
+      </div>
+      <div>
+        <label class="block text-xs tracking-widest text-slate2-500 uppercase mb-2">旅程備註</label>
+        <textarea id="input-notes" rows="3" placeholder="這趟旅程的心得、亮點…" class="w-full border border-sand-200 rounded-xl px-4 py-3 text-sm text-slate2-700 focus:outline-none focus:border-sand-400 bg-sand-50 resize-none transition-colors"></textarea>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs tracking-widest text-slate2-500 uppercase mb-2">緯度</label>
+          <input id="input-lat" type="number" step="any" placeholder="35.6762" class="w-full border border-sand-200 rounded-xl px-4 py-3 text-sm text-slate2-700 focus:outline-none focus:border-sand-400 bg-sand-50 transition-colors" />
+        </div>
+        <div>
+          <label class="block text-xs tracking-widest text-slate2-500 uppercase mb-2">經度</label>
+          <input id="input-lng" type="number" step="any" placeholder="139.6503" class="w-full border border-sand-200 rounded-xl px-4 py-3 text-sm text-slate2-700 focus:outline-none focus:border-sand-400 bg-sand-50 transition-colors" />
+        </div>
+      </div>
+      <p id="geocode-status" class="text-xs text-sand-500 -mt-2">輸入城市名後自動定位，或手動填入座標</p>
+      <div>
+        <label class="block text-xs tracking-widest text-slate2-500 uppercase mb-2">上傳照片</label>
+        <div id="drop-zone" class="border-2 border-dashed border-sand-200 rounded-2xl p-6 text-center cursor-pointer hover:border-sand-400 transition-colors">
+          <input id="file-input" type="file" accept="image/*" multiple class="hidden" />
+          <svg class="w-8 h-8 text-sand-300 mx-auto mb-2" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+          </svg>
+          <p class="text-sm text-slate2-400">拖曳照片到此，或點擊選取</p>
+          <p class="text-xs text-sand-400 mt-1">支援 JPG、PNG、WEBP</p>
+        </div>
+        <div id="photo-preview" class="grid grid-cols-3 gap-2 mt-3 hidden"></div>
+      </div>
+      <button id="btn-submit" class="w-full bg-slate2-700 hover:bg-slate2-600 active:scale-98 text-white rounded-2xl py-4 text-sm font-medium tracking-wide transition-all flex items-center justify-center gap-2 shadow-md">
+        <svg id="submit-icon" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+        </svg>
+        <span id="submit-label">儲存旅程</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ DETAIL MODAL ══════════════════════════ -->
+
+<div id="detail-overlay" class="fixed inset-0 z-[100] bg-black/30 items-center justify-center p-4" style="display:none;opacity:0">
+  <div id="detail-box" class="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden" style="max-height:92vh;overflow-y:auto">
+    <div class="flex items-center justify-between px-7 pt-7 pb-4 border-b border-sand-100">
+      <div>
+        <h3 id="detail-city" class="font-serif text-2xl text-slate2-700"></h3>
+        <p id="detail-dates" class="text-xs text-slate2-400 mt-0.5"></p>
+      </div>
+      <button id="btn-close-detail" class="w-8 h-8 rounded-full bg-sand-100 hover:bg-sand-200 flex items-center justify-center text-slate2-500 transition-colors">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="px-7 py-6 space-y-5">
+      <p id="detail-notes" class="text-sm text-slate2-600 leading-relaxed"></p>
+      <div>
+        <label class="block text-xs tracking-widest text-slate2-500 uppercase mb-2">補充照片</label>
+        <div id="detail-drop-zone" class="border-2 border-dashed border-sand-200 rounded-2xl p-4 text-center cursor-pointer hover:border-sand-400 transition-colors">
+          <input id="detail-file-input" type="file" accept="image/*" multiple class="hidden" />
+          <p class="text-sm text-slate2-400">點擊或拖曳新增照片</p>
+        </div>
+      </div>
+      <div id="detail-photos" class="grid grid-cols-2 sm:grid-cols-3 gap-3"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ TOAST ══ -->
+
+<div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[200] glass rounded-full px-6 py-3 text-sm text-slate2-700 shadow-lg transition-all opacity-0 pointer-events-none" style="transform:translateX(-50%) translateY(16px)">
+  Toast message
+</div>
+
+<!-- ══ DB STATUS BAR (bottom) ══ -->
+
+<div id="db-status-bar" class="fixed bottom-0 left-0 right-0 z-40 flex items-center gap-3 px-5 py-3 bg-slate2-100 border-t border-slate2-200 text-slate2-600 text-sm" style="display:none">
+  <span id="db-status-icon">⏳</span>
+  <span id="db-status-text" class="flex-1"></span>
+  <button id="db-status-action" class="bg-amber-600 text-white text-xs px-3 py-1.5 rounded-full font-medium hover:bg-amber-700 transition-colors" style="display:none"></button>
+</div>
+
+<!-- ══ SQL GUIDE MODAL ══ -->
+
+<div id="sql-guide-overlay" class="fixed inset-0 z-[150] bg-black/40 items-center justify-center p-4" style="display:none;opacity:0;transition:opacity .3s">
+  <div class="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden" style="max-height:90vh;overflow-y:auto">
+    <div class="flex items-center justify-between px-7 pt-7 pb-4 border-b border-sand-100">
+      <h3 class="font-serif text-xl text-slate2-700">🛠️ 建立資料庫步驟</h3>
+      <button onclick="hideSqlGuide()" class="w-8 h-8 rounded-full bg-sand-100 hover:bg-sand-200 flex items-center justify-center text-slate2-500 transition-colors">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="px-7 py-6 space-y-5 text-sm text-slate2-600">
+
+```
+  <div class="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+    <p class="font-medium text-amber-800 mb-1">你需要完成以下兩步</p>
+    <p class="text-amber-700 text-xs">缺一不可，否則資料無法儲存</p>
+  </div>
+
+  <!-- Step 1 -->
+  <div>
+    <p class="font-medium text-slate2-700 mb-2">步驟 1 — 建立 trips 資料表</p>
+    <ol class="space-y-1.5 text-xs text-slate2-500 list-decimal list-inside mb-3">
+      <li>登入 <strong>supabase.com</strong>，進入你的專案</li>
+      <li>左側選 <strong>SQL Editor</strong>（像程式碼的圖示）</li>
+      <li>點 <strong>New query</strong></li>
+      <li>貼入以下 SQL，按 <strong>Run（▶）</strong></li>
+    </ol>
+    <div class="bg-slate2-700 rounded-xl p-4 text-xs text-green-300 font-mono leading-relaxed overflow-x-auto relative">
+      <button onclick="copySql()" class="absolute top-2 right-2 bg-slate2-600 hover:bg-slate2-500 text-slate2-200 text-xs px-2 py-1 rounded-lg transition-colors">複製</button>
+      <pre id="sql-code">create table trips (
+```
+
+id uuid primary key default gen_random_uuid(),
+city text not null,
+country text,
+date_start date not null,
+date_end date,
+notes text,
+lat float,
+lng float,
+photos text[] default ‘{}’,
+created_at timestamptz default now()
+);
+
+alter table trips enable row level security;
+
+create policy “allow all”
+on trips for all
+using (true)
+with check (true);</pre>
+</div>
+<p class="text-xs text-green-600 mt-2">✓ 出現 “Success” 就完成</p>
+</div>
+
+```
+  <!-- Step 2 -->
+  <div>
+    <p class="font-medium text-slate2-700 mb-2">步驟 2 — 建立 photos 儲存空間</p>
+    <ol class="space-y-1.5 text-xs text-slate2-500 list-decimal list-inside">
+      <li>左側選 <strong>Storage</strong>（雲朵圖示）</li>
+      <li>點 <strong>New bucket</strong></li>
+      <li>名稱填 <code class="bg-sand-100 px-1 rounded">photos</code>，勾選 <strong>Public bucket</strong></li>
+      <li>點 <strong>Save</strong></li>
+      <li>進入 photos → <strong>Policies</strong> → <strong>New policy</strong></li>
+      <li>選 <strong>For full customization</strong>，全部打勾，儲存</li>
+    </ol>
+    <p class="text-xs text-green-600 mt-2">✓ 完成後重新整理網頁即可正常儲存</p>
+  </div>
+
+  <button onclick="hideSqlGuide(); location.reload();" class="w-full bg-slate2-700 text-white rounded-2xl py-3.5 text-sm font-medium hover:bg-slate2-600 transition-colors">
+    我已完成，重新載入網頁
+  </button>
+</div>
+```
+
+  </div>
+</div>
+
+<!-- ══ Footer ══ -->
+
+<footer class="text-center py-14 border-t border-sand-100 mb-10">
+  <p class="font-serif italic text-slate2-400 text-sm">「旅行，是認識自己的另一種方式。」</p>
+  <p class="text-xs text-sand-400 mt-2 tracking-widest uppercase">Wanderlog · 旅跡</p>
+</footer>
+
+<!-- ══ Scripts loaded AFTER config ══ -->
+
+<!-- Mapbox JS and Supabase are loaded dynamically AFTER we have the token -->
+
+<script>
+'use strict';
+
+/* ══════════════════════════════════════════════
+   STEP 1 — Fetch config from /api/config
+   金鑰從 Vercel 環境變數取得，不在程式碼裡
+══════════════════════════════════════════════ */
+async function bootstrap() {
+  let cfg;
+  try {
+    const res = await fetch('/api/config');
+    if (!res.ok) throw new Error(await res.text());
+    cfg = await res.json();
+    if (cfg.error) throw new Error(cfg.error);
+  } catch (err) {
+    showError(err.message || '無法取得設定，請確認 Vercel 環境變數已設定。');
+    return;
+  }
+
+  // Hide startup screen
+  hideStartup();
+
+  // Load external scripts dynamically, then init app
+  await loadScript('https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js');
+  await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2');
+
+  initApp(cfg);
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+function showError(msg) {
+  document.getElementById('startup-screen').classList.add('hidden');
+  const banner = document.getElementById('error-banner');
+  document.getElementById('error-msg').textContent = msg;
+  banner.style.display = 'flex';
+}
+
+function hideStartup() {
+  const s = document.getElementById('startup-screen');
+  s.classList.add('hidden');
+  setTimeout(() => s.remove(), 600);
+}
+
+/* ══════════════════════════════════════════════
+   STEP 2 — App init (runs after scripts loaded)
+══════════════════════════════════════════════ */
+function initApp(cfg) {
+  /* ── Supabase ── */
+  const { createClient } = supabase;
+  const db = createClient(cfg.supabaseUrl, cfg.supabaseKey);
+
+  /* ── Mapbox ── */
+  mapboxgl.accessToken = cfg.mapboxToken;
+  const map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/light-v11',
+    center: [120, 23], zoom: 2.2,
+    projection: 'globe', antialias: true
+  });
+  map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
+
+  /* ── State ── */
+  let trips = [];
+  let markers = [];
+  let pendingFiles = [];
+  let currentDetailTrip = null;
+
+  /* ── Toast ── */
+  function toast(msg, duration = 3000) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.style.opacity = '1';
+    el.style.transform = 'translateX(-50%) translateY(0)';
+    setTimeout(() => {
+      el.style.opacity = '0';
+      el.style.transform = 'translateX(-50%) translateY(16px)';
+    }, duration);
+  }
+
+  /* ── Map ready ── */
+  map.on('load', () => {
+    map.setFog({
+      color: '#faf8f5', 'high-color': '#e8dccb',
+      'horizon-blend': 0.04, 'space-color': '#d9c9ae', 'star-intensity': 0.15
+    });
+    loadTrips();
+  });
+
+  /* ── Nav scroll ── */
+  window.addEventListener('scroll', () => {
+    const nav = document.getElementById('top-nav');
+    if (window.scrollY > 20) {
+      nav.style.cssText = 'background:rgba(250,248,245,.9);box-shadow:0 1px 12px rgba(0,0,0,.06);backdrop-filter:blur(16px)';
+    } else {
+      nav.style.cssText = 'background:transparent;box-shadow:none;backdrop-filter:none';
+    }
+  });
+
+  /* ══ LOAD TRIPS ══ */
+  async function loadTrips() {
+    showDbStatus('loading');
+    try {
+      const { data, error } = await db.from('trips').select('*').order('date_start', { ascending: true });
+      if (error) {
+        // 清楚告知哪種錯誤
+        if (error.code === '42P01') {
+          // 資料表不存在
+          showDbStatus('no-table');
+        } else {
+          showDbStatus('error', error.message);
+        }
+        trips = [];
+        renderAll();
+        return;
+      }
+      trips = data || [];
+      showDbStatus('ok');
+      renderAll();
+    } catch (e) {
+      showDbStatus('error', e.message);
+      trips = [];
+      renderAll();
+    }
+  }
+
+  /* ── DB 狀態提示列 ── */
+  function showDbStatus(state, msg) {
+    const bar = document.getElementById('db-status-bar');
+    const icon = document.getElementById('db-status-icon');
+    const text = document.getElementById('db-status-text');
+    const action = document.getElementById('db-status-action');
+
+    bar.style.display = 'flex';
+    action.style.display = 'none';
+
+    if (state === 'loading') {
+      bar.className = 'fixed bottom-0 left-0 right-0 z-40 flex items-center gap-3 px-5 py-3 bg-slate2-100 border-t border-slate2-200 text-slate2-600 text-sm';
+      icon.textContent = '⏳';
+      text.textContent = '正在連線 Supabase 資料庫…';
+
+    } else if (state === 'ok') {
+      // 成功就靜默消失
+      setTimeout(() => { bar.style.display = 'none'; }, 2000);
+      bar.className = 'fixed bottom-0 left-0 right-0 z-40 flex items-center gap-3 px-5 py-3 bg-green-50 border-t border-green-200 text-green-700 text-sm';
+      icon.textContent = '✅';
+      text.textContent = '資料庫連線成功，資料已載入';
+
+    } else if (state === 'no-table') {
+      bar.className = 'fixed bottom-0 left-0 right-0 z-40 flex items-center gap-3 px-5 py-3 bg-amber-50 border-t border-amber-300 text-amber-800 text-sm flex-wrap';
+      icon.textContent = '⚠️';
+      text.textContent = '資料表尚未建立！請到 Supabase 執行 SQL 建立 trips 資料表。';
+      action.style.display = 'inline-block';
+      action.textContent = '查看說明';
+      action.onclick = () => showSqlGuide();
+
+    } else if (state === 'error') {
+      bar.className = 'fixed bottom-0 left-0 right-0 z-40 flex items-center gap-3 px-5 py-3 bg-red-50 border-t border-red-300 text-red-800 text-sm flex-wrap';
+      icon.textContent = '❌';
+      text.textContent = `資料庫連線失敗：${msg || '未知錯誤'}`;
+      action.style.display = 'inline-block';
+      action.textContent = '查看說明';
+      action.onclick = () => showSqlGuide();
+    }
+  }
+
+  /* ── SQL 建表說明 Modal ── */
+  function showSqlGuide() {
+    document.getElementById('sql-guide-overlay').style.display = 'flex';
+    requestAnimationFrame(() => { document.getElementById('sql-guide-overlay').style.opacity = '1'; });
+  }
+  function hideSqlGuide() {
+    const o = document.getElementById('sql-guide-overlay');
+    o.style.opacity = '0';
+    setTimeout(() => { o.style.display = 'none'; }, 300);
+  }
+
+  /* ══ RENDER ══ */
+  function renderAll() {
+    clearMarkers();
+    renderMarkers();
+    renderRoute();
+    renderTimeline();
+    updateKm();
+  }
+
+  function clearMarkers() { markers.forEach(m => m.remove()); markers = []; }
+
+  function renderMarkers() {
+    trips.forEach(trip => {
+      if (!trip.lat || !trip.lng) return;
+      const el = document.createElement('div');
+      el.className = 'pulse-marker';
+      const popup = new mapboxgl.Popup({ offset: 18, closeButton: false })
+        .setHTML(`<strong>${trip.city}</strong><br/><span style="font-size:11px;color:#6b7a94">${trip.country||''} · ${trip.date_start}</span>`);
+      const m = new mapboxgl.Marker({ element: el })
+        .setLngLat([trip.lng, trip.lat]).setPopup(popup).addTo(map);
+      el.addEventListener('mouseenter', () => m.getPopup().addTo(map));
+      el.addEventListener('mouseleave', () => m.getPopup().remove());
+      el.addEventListener('click', () => openDetail(trip));
+      markers.push(m);
+    });
+  }
+
+  function renderRoute() {
+    if (map.getLayer('route-line')) map.removeLayer('route-line');
+    if (map.getSource('route')) map.removeSource('route');
+    const pts = trips.filter(t => t.lat && t.lng).map(t => [t.lng, t.lat]);
+    if (pts.length < 2) return;
+    map.addSource('route', { type:'geojson', data:{ type:'Feature', geometry:{ type:'LineString', coordinates:pts } } });
+    map.addLayer({ id:'route-line', type:'line', source:'route',
+      layout:{ 'line-join':'round', 'line-cap':'round' },
+      paint:{ 'line-color':'#b08d60', 'line-width':1.5, 'line-opacity':0.55, 'line-dasharray':[2,3] }
+    });
+  }
+
+  function haversine(a, b) {
+    const R = 6371, dLat=(b[1]-a[1])*Math.PI/180, dLng=(b[0]-a[0])*Math.PI/180;
+    const x = Math.sin(dLat/2)**2 + Math.cos(a[1]*Math.PI/180)*Math.cos(b[1]*Math.PI/180)*Math.sin(dLng/2)**2;
+    return 2*R*Math.asin(Math.sqrt(x));
+  }
+
+  function updateKm() {
+    const pts = trips.filter(t => t.lat && t.lng).map(t => [t.lng, t.lat]);
+    const el = document.getElementById('km-counter');
+    if (pts.length < 2) { el.textContent = '— km'; return; }
+    let total = 0;
+    for (let i = 1; i < pts.length; i++) total += haversine(pts[i-1], pts[i]);
+    const target = Math.round(total);
+    let cur = 0;
+    const step = Math.max(1, Math.floor(target / 60));
+    const timer = setInterval(() => {
+      cur = Math.min(cur + step, target);
+      el.textContent = cur.toLocaleString() + ' km';
+      if (cur >= target) clearInterval(timer);
+    }, 20);
+  }
+
+  function formatDateRange(start, end) {
+    if (!start) return '';
+    const fmt = d => new Date(d).toLocaleDateString('zh-TW', { year:'numeric', month:'short', day:'numeric' });
+    return end ? `${fmt(start)} → ${fmt(end)}` : fmt(start);
+  }
+
+  function renderTimeline() {
+    const list = document.getElementById('timeline-list');
+    const empty = document.getElementById('timeline-empty');
+    list.querySelectorAll('.trip-card').forEach(c => c.remove());
+    if (!trips.length) { empty.style.display = ''; return; }
+    empty.style.display = 'none';
+
+    [...trips].reverse().forEach(trip => {
+      const card = document.createElement('div');
+      card.className = 'trip-card relative mb-10';
+      const photosHtml = (trip.photos||[]).length
+        ? `<div class="flex gap-2 mt-3 overflow-x-auto pb-1">${(trip.photos||[]).slice(0,4).map(url=>`<img src="${url}" class="photo-thumb w-20 h-14 object-cover rounded-xl flex-shrink-0" loading="lazy"/>`).join('')}</div>` : '';
+      card.innerHTML = `
+        <div class="absolute -left-6 top-1.5 w-3.5 h-3.5 rounded-full bg-sand-400 border-2 border-white shadow-sm"></div>
+        <div class="glass rounded-2xl p-5 ml-2 cursor-pointer hover:shadow-md transition-shadow">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <span class="text-xs tracking-widest text-sand-500 uppercase">${trip.country||''}</span>
+              <h3 class="font-serif text-xl text-slate2-700 mt-0.5">${trip.city}</h3>
+              <p class="text-xs text-slate2-400 mt-1">${formatDateRange(trip.date_start, trip.date_end)}</p>
+            </div>
+            <button class="btn-fly w-9 h-9 rounded-full bg-sand-100 hover:bg-sand-200 flex items-center justify-center text-sand-600 transition-colors flex-shrink-0" title="在地圖上看">
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+            </button>
+          </div>
+          ${trip.notes ? `<p class="text-sm text-slate2-500 mt-3 leading-relaxed line-clamp-2">${trip.notes}</p>` : ''}
+          ${photosHtml}
+        </div>`;
+      list.appendChild(card);
+
+      card.querySelector('.glass').addEventListener('click', e => {
+        if (e.target.closest('.btn-fly')) return;
+        openDetail(trip);
+      });
+      card.querySelector('.btn-fly').addEventListener('click', e => {
+        e.stopPropagation();
+        if (!trip.lat || !trip.lng) { toast('這筆旅程沒有座標'); return; }
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        setTimeout(() => map.flyTo({ center: [trip.lng, trip.lat], zoom: 7, duration: 2000 }), 400);
+      });
+    });
+  }
+
+  /* ══ MODAL — ADD ══ */
+  document.getElementById('btn-add-trip').addEventListener('click', openAddModal);
+  document.getElementById('btn-close-modal').addEventListener('click', closeAddModal);
+  document.getElementById('modal-overlay').addEventListener('click', e => {
+    if (e.target === document.getElementById('modal-overlay')) closeAddModal();
+  });
+
+  function openAddModal() {
+    pendingFiles = [];
+    document.getElementById('photo-preview').innerHTML = '';
+    document.getElementById('photo-preview').classList.add('hidden');
+    ['input-city','input-country','input-notes','input-lat','input-lng'].forEach(id => document.getElementById(id).value = '');
+    ['input-date-start','input-date-end'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('geocode-status').textContent = '輸入城市名後自動定位，或手動填入座標';
+    showOverlay('modal-overlay');
+  }
+  function closeAddModal() { hideOverlay('modal-overlay'); }
+
+  function showOverlay(id) {
+    const o = document.getElementById(id);
+    o.style.display = 'flex';
+    requestAnimationFrame(() => { o.style.transition = 'opacity .3s'; o.style.opacity = '1'; });
+  }
+  function hideOverlay(id) {
+    const o = document.getElementById(id);
+    o.style.opacity = '0';
+    setTimeout(() => { o.style.display = 'none'; }, 320);
+  }
+
+  /* ── Geocode ── */
+  let gTimer;
+  document.getElementById('input-city').addEventListener('input', () => {
+    clearTimeout(gTimer);
+    gTimer = setTimeout(geocodeCity, 800);
+  });
+  async function geocodeCity() {
+    const city = document.getElementById('input-city').value.trim();
+    if (!city) return;
+    const st = document.getElementById('geocode-status');
+    st.textContent = '正在定位…';
+    try {
+      const r = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(city)}.json?access_token=${cfg.mapboxToken}&limit=1`);
+      const d = await r.json();
+      if (d.features?.length) {
+        const [lng, lat] = d.features[0].center;
+        document.getElementById('input-lat').value = lat.toFixed(5);
+        document.getElementById('input-lng').value = lng.toFixed(5);
+        st.textContent = `✓ 定位：${d.features[0].place_name}`;
+      } else st.textContent = '找不到，請手動填入座標';
+    } catch { st.textContent = '定位失敗，請手動填入'; }
+  }
+
+  /* ── File pick ── */
+  const dropZone = document.getElementById('drop-zone');
+  const fileInput = document.getElementById('file-input');
+  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); handleFiles(e.dataTransfer.files, 'add'); });
+  fileInput.addEventListener('change', () => handleFiles(fileInput.files, 'add'));
+
+  function handleFiles(fileList, target) {
+    const preview = target === 'add' ? document.getElementById('photo-preview') : null;
+    if (preview) preview.classList.remove('hidden');
+    Array.from(fileList).forEach(f => {
+      if (!f.type.startsWith('image/')) return;
+      if (target === 'add') pendingFiles.push(f);
+      if (preview) {
+        const reader = new FileReader();
+        reader.onload = ev => {
+          const img = document.createElement('img');
+          img.src = ev.target.result;
+          img.className = 'photo-thumb w-full h-20 object-cover rounded-xl';
+          preview.appendChild(img);
+        };
+        reader.readAsDataURL(f);
+      }
+    });
+  }
+
+  /* ── Submit ── */
+  document.getElementById('btn-submit').addEventListener('click', submitTrip);
+
+  async function submitTrip() {
+    const city = document.getElementById('input-city').value.trim();
+    const dateStart = document.getElementById('input-date-start').value;
+    if (!city || !dateStart) { toast('請填寫城市與開始日期 ✱'); return; }
+
+    setSubmitLoading(true);
+    const photoUrls = [];
+    for (const f of pendingFiles) { const u = await uploadPhoto(f); if (u) photoUrls.push(u); }
+
+    const trip = {
+      city, country: document.getElementById('input-country').value.trim(),
+      date_start: dateStart,
+      date_end: document.getElementById('input-date-end').value || null,
+      notes: document.getElementById('input-notes').value.trim(),
+      lat: parseFloat(document.getElementById('input-lat').value) || null,
+      lng: parseFloat(document.getElementById('input-lng').value) || null,
+      photos: photoUrls,
+    };
+
+    try {
+      const { data, error } = await db.from('trips').insert([trip]).select().single();
+      if (error) throw error;
+      trips.push(data);
+      trips.sort((a,b) => a.date_start.localeCompare(b.date_start));
+      renderAll();
+      closeAddModal();
+      toast(`✅ 已儲存：${city}（重新整理後資料仍在）`);
+    } catch (e) {
+      // 真實錯誤要讓用戶看到，不能靜默失敗
+      let hint = e.message || '未知錯誤';
+      if (hint.includes('42P01')) hint = '資料表不存在，請先在 Supabase 建立 trips 資料表';
+      if (hint.includes('JWTExpired') || hint.includes('Invalid API key')) hint = 'Supabase 金鑰無效，請確認 Vercel 環境變數';
+      toast(`❌ 儲存失敗：${hint}`, 6000);
+      console.error('DB insert error:', e);
+    }
+    setSubmitLoading(false);
+  }
+
+  function setSubmitLoading(on) {
+    const btn = document.getElementById('btn-submit');
+    const lbl = document.getElementById('submit-label');
+    btn.disabled = on;
+    lbl.textContent = on ? '儲存中…' : '儲存旅程';
+  }
+
+  async function uploadPhoto(file) {
+    try {
+      const ext = file.name.split('.').pop();
+      const path = `trip-photos/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error } = await db.storage.from('photos').upload(path, file, { contentType: file.type });
+      if (error) throw error;
+      const { data } = db.storage.from('photos').getPublicUrl(path);
+      return data.publicUrl;
+    } catch (e) {
+      // 不再靜默 fallback，讓用戶知道照片沒上傳成功
+      toast(`⚠️ 照片上傳失敗：${e.message}。請確認 Supabase Storage 已建立 photos bucket。`, 5000);
+      return null;
+    }
+  }
+
+  /* ══ DETAIL MODAL ══ */
+  document.getElementById('btn-close-detail').addEventListener('click', () => hideOverlay('detail-overlay'));
+  document.getElementById('detail-overlay').addEventListener('click', e => {
+    if (e.target === document.getElementById('detail-overlay')) hideOverlay('detail-overlay');
+  });
+
+  const detailDrop = document.getElementById('detail-drop-zone');
+  const detailInput = document.getElementById('detail-file-input');
+  detailDrop.addEventListener('click', () => detailInput.click());
+  detailDrop.addEventListener('dragover', e => { e.preventDefault(); detailDrop.classList.add('drag-over'); });
+  detailDrop.addEventListener('dragleave', () => detailDrop.classList.remove('drag-over'));
+  detailDrop.addEventListener('drop', e => { e.preventDefault(); detailDrop.classList.remove('drag-over'); handleDetailFiles(e.dataTransfer.files); });
+  detailInput.addEventListener('change', () => handleDetailFiles(detailInput.files));
+
+  function openDetail(trip) {
+    currentDetailTrip = trip;
+    document.getElementById('detail-city').textContent = trip.city;
+    document.getElementById('detail-dates').textContent = formatDateRange(trip.date_start, trip.date_end) + (trip.country ? ` · ${trip.country}` : '');
+    document.getElementById('detail-notes').textContent = trip.notes || '（沒有備註）';
+    renderDetailPhotos(trip.photos || []);
+    showOverlay('detail-overlay');
+  }
+
+  function renderDetailPhotos(photos) {
+    const grid = document.getElementById('detail-photos');
+    grid.innerHTML = '';
+    (photos||[]).forEach(url => {
+      const img = document.createElement('img');
+      img.src = url;
+      img.className = 'photo-thumb w-full h-40 object-cover rounded-2xl cursor-zoom-in';
+      img.addEventListener('click', () => window.open(url, '_blank'));
+      grid.appendChild(img);
+    });
+  }
+
+  async function handleDetailFiles(fileList) {
+    if (!currentDetailTrip) return;
+    const newUrls = [];
+    for (const f of Array.from(fileList)) {
+      if (!f.type.startsWith('image/')) continue;
+      const url = await uploadPhoto(f); if (url) newUrls.push(url);
+    }
+    currentDetailTrip.photos = [...(currentDetailTrip.photos||[]), ...newUrls];
+    try { await db.from('trips').update({ photos: currentDetailTrip.photos }).eq('id', currentDetailTrip.id); }
+    catch(e) { console.warn('Photo update fail:', e); }
+    renderDetailPhotos(currentDetailTrip.photos);
+    renderTimeline();
+    toast(`已新增 ${newUrls.length} 張照片`);
+  }
+
+} // end initApp
+
+// ── SQL copy helper (global scope for onclick) ──
+function copySql() {
+  const sql = document.getElementById('sql-code').textContent;
+  navigator.clipboard.writeText(sql).then(() => {
+    const btn = document.querySelector('[onclick="copySql()"]');
+    btn.textContent = '已複製！';
+    setTimeout(() => btn.textContent = '複製', 2000);
+  });
+}
+function hideSqlGuide() {
+  const o = document.getElementById('sql-guide-overlay');
+  o.style.opacity = '0';
+  setTimeout(() => { o.style.display = 'none'; }, 300);
+}
+
+// ── Kick off ──
+bootstrap();
+</script>
+
+</body>
+</html>
